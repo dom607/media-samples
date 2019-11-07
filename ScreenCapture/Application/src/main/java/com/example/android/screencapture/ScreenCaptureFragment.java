@@ -19,14 +19,22 @@ package com.example.android.screencapture;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Point;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioRecord;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.media.CamcorderProfile;
+import android.media.MediaRecorder;
+import android.media.AudioPlaybackCaptureConfiguration;
+import android.os.AsyncTask;
 import android.os.Bundle;
-import android.support.annotation.Nullable;
-import android.support.v4.app.Fragment;
+import android.os.Environment;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
 import android.util.DisplayMetrics;
+import android.view.Display;
 import android.view.LayoutInflater;
 import android.view.Surface;
 import android.view.SurfaceView;
@@ -36,6 +44,12 @@ import android.widget.Button;
 import android.widget.Toast;
 
 import com.example.android.common.logger.Log;
+
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 /**
  * Provides UI for the screen capture.
@@ -56,10 +70,19 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
 
     private Surface mSurface;
     private MediaProjection mMediaProjection;
+    private AudioRecord mAudioRecord;
     private VirtualDisplay mVirtualDisplay;
     private MediaProjectionManager mMediaProjectionManager;
     private Button mButtonToggle;
     private SurfaceView mSurfaceView;
+
+    // MediaRecorder variables
+    private MediaRecorder mMediaRecorder;
+    private File mOutputFile;
+    private boolean isRecording = false;
+
+    private int mScreenWidth;
+    private int mScreenHeight;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -89,8 +112,20 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
         super.onActivityCreated(savedInstanceState);
         Activity activity = getActivity();
         DisplayMetrics metrics = new DisplayMetrics();
-        activity.getWindowManager().getDefaultDisplay().getMetrics(metrics);
+        Display display = activity.getWindowManager().getDefaultDisplay();
+        display.getMetrics(metrics);
+
         mScreenDensity = metrics.densityDpi;
+
+        Point size = new Point();
+        display.getSize(size);
+
+        mScreenWidth = size.x;
+        mScreenHeight = size.y;
+
+//        mScreenWidth = 720;
+//        mScreenHeight = 1280;
+
         mMediaProjectionManager = (MediaProjectionManager)
                 activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
     }
@@ -132,7 +167,7 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
             Log.i(TAG, "Starting screen capture");
             mResultCode = resultCode;
             mResultData = data;
-            setUpMediaProjection();
+
             setUpVirtualDisplay();
         }
     }
@@ -180,14 +215,27 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
     }
 
     private void setUpVirtualDisplay() {
-        Log.i(TAG, "Setting up a VirtualDisplay: " +
-                mSurfaceView.getWidth() + "x" + mSurfaceView.getHeight() +
-                " (" + mScreenDensity + ")");
+        if (!prepareVideoRecorder()) {
+            Log.d(TAG, "Failed to prepare MediaRecorder");
+            return;
+        }
+
+        Surface surface = mMediaRecorder.getSurface();
+        if (!surface.isValid()) {
+            Log.d(TAG, "MediaRecorder input surface is not valid.");
+            return;
+        }
+
+//        Log.i(TAG, "Setting up a VirtualDisplay: " +
+//                mSurfaceView.getWidth() + "x" + mSurfaceView.getHeight() +
+//                " (" + mScreenDensity + ")");
+
         mVirtualDisplay = mMediaProjection.createVirtualDisplay("ScreenCapture",
-                mSurfaceView.getWidth(), mSurfaceView.getHeight(), mScreenDensity,
+                mScreenWidth, mScreenHeight, mScreenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                mSurface, null, null);
+                surface, null, null);
         mButtonToggle.setText(R.string.stop);
+        new MediaPrepareTask().execute(null, null, null);
     }
 
     private void stopScreenCapture() {
@@ -196,7 +244,126 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
         }
         mVirtualDisplay.release();
         mVirtualDisplay = null;
+
+        // stop recording and release camera
+        try {
+            mMediaRecorder.stop();  // stop the recording
+        } catch (RuntimeException e) {
+            // RuntimeException is thrown when stop() is called immediately after start().
+            // In this case the output file is not properly constructed ans should be deleted.
+            android.util.Log.d(TAG, "RuntimeException: stop() is called immediately after start()");
+            //noinspection ResultOfMethodCallIgnored
+            mOutputFile.delete();
+        }
+        releaseMediaRecorder(); // release the MediaRecorder object
+
+        // inform the user that recording has stopped
+
         mButtonToggle.setText(R.string.start);
+        isRecording = false;
+    }
+
+    private boolean prepareVideoRecorder() {
+        // MediaRecorder profile
+        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH);
+        mMediaRecorder = new MediaRecorder();
+
+        Display display = getActivity().getWindowManager().getDefaultDisplay();
+        Point size = new Point();
+        display.getSize(size);
+
+//        profile.videoFrameWidth = mScreenWidth;
+//        profile.videoFrameHeight = mScreenHeight;
+
+        profile.videoFrameWidth = mScreenWidth;
+        profile.videoFrameHeight = mScreenHeight;
+
+//        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
+        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.UNPROCESSED);
+        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+        mMediaRecorder.setProfile(profile);
+        mMediaRecorder.setOutputFile(getOutputMediaFile().getPath());
+
+        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
+
+        try {
+            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
+            mAudioRecord = new AudioRecord.Builder().setAudioPlaybackCaptureConfig(audioCaptureConfig).build();
+        } catch(Exception e) {
+            e.getMessage();
+        }
+
+
+
+        // Step 5: Prepare configured MediaRecorder
+        try {
+            mMediaRecorder.prepare();
+        } catch (IllegalStateException e) {
+            android.util.Log.d(TAG, "IllegalStateException preparing MediaRecorder: " + e.getMessage());
+            releaseMediaRecorder();
+            return false;
+        } catch (IOException e) {
+            android.util.Log.d(TAG, "IOException preparing MediaRecorder: " + e.getMessage());
+            releaseMediaRecorder();
+            return false;
+        }
+        return true;
+    }
+
+
+    private void releaseMediaRecorder() {
+        if (mMediaRecorder != null) {
+            mMediaRecorder.reset();
+            mMediaRecorder.release();
+            mMediaRecorder = null;
+        }
+    }
+
+    public static File getOutputMediaFile(){
+        // To be safe, you should check that the SDCard is mounted
+        // using Environment.getExternalStorageState() before doing this.
+        if (!Environment.getExternalStorageState().equalsIgnoreCase(Environment.MEDIA_MOUNTED)) {
+            return  null;
+        }
+
+        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_PICTURES), "CameraSample");
+        // This location works best if you want the created images to be shared
+        // between applications and persist after your app has been uninstalled.
+
+        // Create the storage directory if it does not exist
+        if (! mediaStorageDir.exists()){
+            if (! mediaStorageDir.mkdirs()) {
+                android.util.Log.d("CameraSample", "failed to create directory");
+                return null;
+            }
+        }
+
+        // Create a media file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        File mediaFile = new File(mediaStorageDir.getPath() + File.separator + "VID_" + timeStamp + ".mp4");
+
+        return mediaFile;
+    }
+
+    class MediaPrepareTask extends AsyncTask<Void, Void, Boolean> {
+        @Override
+        protected Boolean doInBackground(Void... voids) {
+            Log.i(TAG, "Start mediaRecorder");
+            mMediaRecorder.start();
+            isRecording = true;
+            return true;
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+            if (!result) {
+                getActivity().finish();
+            }
+            // inform the user that recording has started
+
+            mButtonToggle.setText(R.string.stop);
+        }
     }
 
 }
