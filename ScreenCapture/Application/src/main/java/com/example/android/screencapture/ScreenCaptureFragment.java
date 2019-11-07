@@ -167,7 +167,7 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
             Log.i(TAG, "Starting screen capture");
             mResultCode = resultCode;
             mResultData = data;
-
+            setUpMediaProjection();
             setUpVirtualDisplay();
         }
     }
@@ -284,17 +284,6 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
         mMediaRecorder.setProfile(profile);
         mMediaRecorder.setOutputFile(getOutputMediaFile().getPath());
 
-        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
-
-        try {
-            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
-            mAudioRecord = new AudioRecord.Builder().setAudioPlaybackCaptureConfig(audioCaptureConfig).build();
-        } catch(Exception e) {
-            e.getMessage();
-        }
-
-
-
         // Step 5: Prepare configured MediaRecorder
         try {
             mMediaRecorder.prepare();
@@ -307,6 +296,15 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
             releaseMediaRecorder();
             return false;
         }
+
+//        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
+//
+//        try {
+//            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
+//            mAudioRecord = new AudioRecord.Builder().setAudioPlaybackCaptureConfig(audioCaptureConfig).build();
+//        } catch(Exception e) {
+//            e.getMessage();
+//        }
         return true;
     }
 
