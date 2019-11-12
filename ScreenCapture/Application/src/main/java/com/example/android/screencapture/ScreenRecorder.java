@@ -10,6 +10,10 @@ import android.content.Intent;
 import android.graphics.BitmapFactory;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
+import android.media.AudioRecord;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
@@ -40,6 +44,7 @@ public class ScreenRecorder extends Service {
     MediaProjection mMediaProjection;
     MediaProjectionManager mMediaProjectionManager;
     MediaRecorder mMediaRecorder;
+    AudioRecord mAudioRecord;
 
     // Service data
     int mResultCode;
@@ -191,14 +196,32 @@ public class ScreenRecorder extends Service {
             return false;
         }
 
-//        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
-//
-//        try {
-//            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
-//            mAudioRecord = new AudioRecord.Builder().setAudioPlaybackCaptureConfig(audioCaptureConfig).build();
-//        } catch(Exception e) {
-//            e.getMessage();
-//        }
+        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
+        builder.addMatchingUsage(AudioAttributes.USAGE_GAME);
+        builder.addMatchingUsage(AudioAttributes.USAGE_MEDIA);
+
+
+
+        try {
+            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
+
+            int minBufferSize = AudioRecord.getMinBufferSize(44100, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+
+            mAudioRecord = new AudioRecord.Builder()
+                .setAudioPlaybackCaptureConfig(audioCaptureConfig)
+                .setAudioFormat(new AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(44100)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                    .build())
+                .setBufferSizeInBytes(minBufferSize)
+                .build();
+
+        } catch(Exception e) {
+            e.getMessage();
+        }
+
+
         return true;
     }
 
