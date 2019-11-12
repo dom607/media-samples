@@ -17,6 +17,8 @@
 package com.example.android.screencapture;
 
 import android.app.Activity;
+import android.app.NotificationManager;
+import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Point;
@@ -44,12 +46,14 @@ import android.widget.Button;
 import android.widget.Toast;
 
 import com.example.android.common.logger.Log;
+import com.example.android.screencapture.ScreenRecorder;
 
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * Provides UI for the screen capture.
@@ -143,7 +147,7 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
     public void onClick(View v) {
         switch (v.getId()) {
             case R.id.toggle:
-                if (mVirtualDisplay == null) {
+                if (!isRecording) {
                     startScreenCapture();
                 } else {
                     stopScreenCapture();
@@ -164,18 +168,32 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
             if (activity == null) {
                 return;
             }
-            Log.i(TAG, "Starting screen capture");
             mResultCode = resultCode;
             mResultData = data;
-            setUpMediaProjection();
-            setUpVirtualDisplay();
+            Intent service = new Intent(activity, ScreenRecorder.class);
+            service.putExtra("code", resultCode);
+            service.putExtras(data);
+            service.putExtra("width", mScreenWidth);
+            service.putExtra("height", mScreenHeight);
+            service.putExtra("dpi", mScreenDensity);
+            getContext().startForegroundService(service);
+
+//            setUpMediaProjection();
+//            setUpVirtualDisplay();
         }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        stopScreenCapture();
+        Log.i(TAG, "onPause");
+//        stopScreenCapture();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        Log.i(TAG, "onResume");
     }
 
     @Override
@@ -196,22 +214,26 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
     }
 
     private void startScreenCapture() {
-        Activity activity = getActivity();
-        if (mSurface == null || activity == null) {
-            return;
-        }
-        if (mMediaProjection != null) {
-            setUpVirtualDisplay();
-        } else if (mResultCode != 0 && mResultData != null) {
-            setUpMediaProjection();
-            setUpVirtualDisplay();
-        } else {
-            Log.i(TAG, "Requesting confirmation");
-            // This initiates a prompt dialog for the user to confirm screen projection.
-            startActivityForResult(
-                    mMediaProjectionManager.createScreenCaptureIntent(),
-                    REQUEST_MEDIA_PROJECTION);
-        }
+//        Activity activity = getActivity();
+//        if (mSurface == null || activity == null) {
+//            return;
+//        }
+//        if (mMediaProjection != null) {
+//            setUpVirtualDisplay();
+//        } else if (mResultCode != 0 && mResultData != null) {
+//            setUpMediaProjection();
+//            setUpVirtualDisplay();
+//        } else {
+//            Log.i(TAG, "Requesting confirmation");
+//            // This initiates a prompt dialog for the user to confirm screen projection.
+        Log.i(TAG, "Starting screen capture");
+
+        isRecording = true;
+        mButtonToggle.setText(R.string.stop);
+
+        startActivityForResult(
+                mMediaProjectionManager.createScreenCaptureIntent(),
+                REQUEST_MEDIA_PROJECTION);
     }
 
     private void setUpVirtualDisplay() {
@@ -239,25 +261,28 @@ public class ScreenCaptureFragment extends Fragment implements View.OnClickListe
     }
 
     private void stopScreenCapture() {
-        if (mVirtualDisplay == null) {
-            return;
-        }
-        mVirtualDisplay.release();
-        mVirtualDisplay = null;
+        Log.i(TAG, "Stop screen capture");
 
-        // stop recording and release camera
-        try {
-            mMediaRecorder.stop();  // stop the recording
-        } catch (RuntimeException e) {
-            // RuntimeException is thrown when stop() is called immediately after start().
-            // In this case the output file is not properly constructed ans should be deleted.
-            android.util.Log.d(TAG, "RuntimeException: stop() is called immediately after start()");
-            //noinspection ResultOfMethodCallIgnored
-            mOutputFile.delete();
-        }
-        releaseMediaRecorder(); // release the MediaRecorder object
+//        if (mVirtualDisplay == null) {
+//            return;
+//        }
+//        mVirtualDisplay.release();
+//        mVirtualDisplay = null;
+//
+//        // stop recording and release camera
+//        try {
+//            mMediaRecorder.stop();  // stop the recording
+//        } catch (RuntimeException e) {
+//            // RuntimeException is thrown when stop() is called immediately after start().
+//            // In this case the output file is not properly constructed ans should be deleted.
+//            android.util.Log.d(TAG, "RuntimeException: stop() is called immediately after start()");
+//            //noinspection ResultOfMethodCallIgnored
+//            mOutputFile.delete();
+//        }
+//        releaseMediaRecorder(); // release the MediaRecorder object
 
-        // inform the user that recording has stopped
+        Intent intent = new Intent(getActivity(), ScreenRecorder.class);
+        getContext().stopService(intent);
 
         mButtonToggle.setText(R.string.start);
         isRecording = false;
