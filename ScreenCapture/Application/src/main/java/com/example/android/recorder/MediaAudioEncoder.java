@@ -22,13 +22,16 @@ package com.example.android.recorder;
  * All files in the folder are under this Apache License, Version 2.0.
  */
 
+import android.media.AudioAttributes;
 import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.AudioRecord;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.media.MediaRecorder;
+import android.media.projection.MediaProjection;
 import android.util.Log;
 
 import java.io.IOException;
@@ -45,9 +48,11 @@ public class MediaAudioEncoder extends MediaEncoder {
     public static final int FRAMES_PER_BUFFER = 25; 	// AAC, frame/buffer/sec
 
     private AudioThread mAudioThread = null;
+    private MediaProjection mMediaProjection;
 
-    public MediaAudioEncoder(final MediaMuxerWrapper muxer, final MediaEncoderListener listener) {
+    public MediaAudioEncoder(final MediaMuxerWrapper muxer, final MediaEncoderListener listener, final MediaProjection mediaProjection) {
         super(muxer, listener);
+        mMediaProjection = mediaProjection;
     }
 
     @Override
@@ -97,6 +102,7 @@ public class MediaAudioEncoder extends MediaEncoder {
     @Override
     protected void release() {
         mAudioThread = null;
+        mMediaProjection = null;
         super.release();
     }
 
@@ -125,18 +131,55 @@ public class MediaAudioEncoder extends MediaEncoder {
                     buffer_size = ((min_buffer_size / SAMPLES_PER_FRAME) + 1) * SAMPLES_PER_FRAME * 2;
 
                 AudioRecord audioRecord = null;
-                for (final int source : AUDIO_SOURCES) {
+
+                if (mMediaProjection != null) {
+                    AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_UNKNOWN);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_GAME);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_MEDIA);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_ALARM);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_NOTIFICATION);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION);
+                    builder.addMatchingUsage(AudioAttributes.USAGE_ASSISTANT);
+
+//                    builder.addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION);
+
                     try {
-                        audioRecord = new AudioRecord(
-                                source, SAMPLE_RATE,
-                                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, buffer_size);
-                        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED)
-                            audioRecord = null;
-                    } catch (final Exception e) {
-                        audioRecord = null;
+                        AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
+
+                        audioRecord = new AudioRecord.Builder()
+                            .setAudioPlaybackCaptureConfig(audioCaptureConfig)
+                            .setAudioFormat(new AudioFormat.Builder()
+                                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                    .setSampleRate(SAMPLE_RATE)
+                                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                    .build())
+                            .setBufferSizeInBytes(buffer_size)
+                            .build();
+
+                    } catch(Exception e) {
+                        e.getMessage();
                     }
-                    if (audioRecord != null) break;
                 }
+                else {
+                    for (final int source : AUDIO_SOURCES) {
+                        try {
+                            audioRecord = new AudioRecord(
+                                    source, SAMPLE_RATE,
+                                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, buffer_size);
+                            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED)
+                                audioRecord = null;
+                        } catch (final Exception e) {
+                            audioRecord = null;
+                        }
+                        if (audioRecord != null) break;
+                    }
+                }
+
                 if (audioRecord != null) {
                     try {
                         if (mIsCapturing) {

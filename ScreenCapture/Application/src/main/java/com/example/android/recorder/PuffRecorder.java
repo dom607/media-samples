@@ -1,5 +1,6 @@
 package com.example.android.recorder;
 
+import android.media.projection.MediaProjection;
 import android.util.Log;
 import android.view.Surface;
 
@@ -9,6 +10,8 @@ public class PuffRecorder {
 
     private static final String TAG = "PuffRecorder";
     public MediaVideoEncoder mMediaVideoEncoder;
+    private MediaProjection mMediaProjection;
+
     public enum RecordType {
         VideoOnly,
         AudioOnly,
@@ -36,6 +39,13 @@ public class PuffRecorder {
         }
     }
 
+    // TODO : Make builder to easy creation
+
+    // set projection before prepare call
+    public void setMediaProjection(MediaProjection mediaProjection) {
+        mMediaProjection = mediaProjection;
+    }
+
     // 이렇게 하거나, listener 에다가 자동으로 hook 하도록 추가할 것.
     public void setVideoSurface(Surface surface) {
         this.mSurface = surface;
@@ -50,27 +60,33 @@ public class PuffRecorder {
         return this.mMuxer.getOutputPath();
     }
 
-    public void startRecord(RecordType recordType) {
+    public boolean prepare(RecordType recordType) {
         try{
             this.mRecordType = recordType;
             switch (mRecordType) {
                 case AudioOnly:
-                    new MediaAudioEncoder(mMuxer, mMediaEncoderListener);
+                    new MediaAudioEncoder(mMuxer, mMediaEncoderListener, mMediaProjection);
                     break;
                 case VideoOnly:
                     new MediaVideoEncoder(mMuxer, mMediaEncoderListener, mWidth, mHeight);
                     break;
                 case VideoAudio:
-                    new MediaAudioEncoder(mMuxer, mMediaEncoderListener);
+                    new MediaAudioEncoder(mMuxer, mMediaEncoderListener, mMediaProjection);
                     new MediaVideoEncoder(mMuxer, mMediaEncoderListener, mWidth, mHeight);
                     break;
             }
 
             mMuxer.prepare(this);
-            mMuxer.startRecording();
+            return true;
         } catch (final IOException e) {
             Log.e(TAG, "startCapture:", e);
+            return false;
         }
+    }
+
+
+    public void startRecord() {
+        mMuxer.startRecording();
     }
 
     public void endRecord() {
@@ -81,6 +97,7 @@ public class PuffRecorder {
             }
             mSurface = null;
             mMuxer = null;
+            mMediaProjection = null;
         }
     }
 

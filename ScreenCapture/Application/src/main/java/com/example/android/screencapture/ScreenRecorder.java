@@ -10,29 +10,24 @@ import android.content.Intent;
 import android.graphics.BitmapFactory;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.media.AudioAttributes;
-import android.media.AudioFormat;
-import android.media.AudioPlaybackCaptureConfiguration;
-import android.media.AudioRecord;
-import android.media.CamcorderProfile;
-import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
-import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Environment;
 import android.os.IBinder;
-import android.view.Display;
 import android.view.Surface;
 
 import com.example.android.common.logger.Log;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Objects;
+
+import com.example.android.recorder.PuffRecorder;
 
 public class ScreenRecorder extends Service {
     private static final String TAG = "ScreenRecorderService";
@@ -40,11 +35,10 @@ public class ScreenRecorder extends Service {
     VirtualDisplay mVirtualDisplay;
     File mOutputFile;
 
-    // Android Media classes
+    // Media classes muxer, muxer wapper and so on.
     MediaProjection mMediaProjection;
     MediaProjectionManager mMediaProjectionManager;
-    MediaRecorder mMediaRecorder;
-    AudioRecord mAudioRecord;
+    PuffRecorder mPuffRecorder;
 
     // Service data
     int mResultCode;
@@ -56,6 +50,9 @@ public class ScreenRecorder extends Service {
     int mWidth;
     int mHeight;
     int mDpi;
+
+    // Thread
+    CaptureThread mCaptureThread;
 
     @Override
     public void onCreate() {
@@ -87,8 +84,7 @@ public class ScreenRecorder extends Service {
         if (!prepareVideoRecorder()) {
             Log.e(TAG, "Failed to create MediaRecorder");
         }
-        Surface inputSurface = mMediaRecorder.getSurface();
-
+        Surface inputSurface = mPuffRecorder.getVideoSurface();
         if (!inputSurface.isValid()) {
             Log.e(TAG, "Non valid surface");
         }
@@ -103,8 +99,13 @@ public class ScreenRecorder extends Service {
         if (mVirtualDisplay == null) {
             Log.e(TAG, "Failed to create mVirtualDisplay");
         }
+
+        // Finally launch thread
+        mCaptureThread = new CaptureThread(new WeakReference<ScreenRecorder>(this));
+        mCaptureThread.start();
+
         Log.i(TAG, "Start recording");
-        mMediaRecorder.start();
+        mPuffRecorder.startRecord();
 
         return super.onStartCommand(intent, flags, startId);
     }
@@ -126,16 +127,10 @@ public class ScreenRecorder extends Service {
         mVirtualDisplay.release();
         mVirtualDisplay = null;
 
-        try {
-            Log.i(TAG, "Stop recording");
-            mMediaRecorder.stop();  // stop the recording
-        } catch (RuntimeException e) {
-            // RuntimeException is thrown when stop() is called immediately after start().
-            // In this case the output file is not properly constructed ans should be deleted.
-            android.util.Log.d(TAG, "RuntimeException: stop() is called immediately after start()");
-            //noinspection ResultOfMethodCallIgnored
-            mOutputFile.delete();
-        }
+        mCaptureThread.mShouldTerminate = true;
+
+        // TODO : wait thread termination and assign null to mThread.
+        mPuffRecorder.endRecord();
         releaseMediaRecorder();
 
         super.onDestroy();
@@ -164,73 +159,74 @@ public class ScreenRecorder extends Service {
         }
 
         Notification notification = builder.build(); //
-        notification.defaults = Notification.DEFAULT_SOUND;
+        notification.defaults = Notification.DEFAULT_SOUND; // deprecated
         startForeground(110, notification);
     }
 
     private boolean prepareVideoRecorder() {
         // MediaRecorder profile
-        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH);
-        mMediaRecorder = new MediaRecorder();
         mOutputFile = getOutputMediaFile();
         Log.i(TAG, "Output path : " + mOutputFile.getPath());
-        profile.videoFrameWidth = mWidth;
-        profile.videoFrameHeight = mHeight;
 
+        mPuffRecorder = new PuffRecorder(mWidth, mHeight, mOutputFile.getPath());
+        mPuffRecorder.setMediaProjection(mMediaProjection);
+        mPuffRecorder.prepare(PuffRecorder.RecordType.VideoAudio);
+
+        if (mPuffRecorder == null) {
+            return false;
+        }
+
+//        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH);
+//        mMediaRecorder = new MediaRecorder();
+//        profile.videoFrameWidth = mWidth;
+//        profile.videoFrameHeight = mHeight;
+//
 //        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
-        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mMediaRecorder.setProfile(profile);
-        mMediaRecorder.setOutputFile(mOutputFile.getPath());
+//        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+//        mMediaRecorder.setProfile(profile);
+//        mMediaRecorder.setOutputFile(mOutputFile.getPath());
+//
+//        // Step 5: Prepare configured MediaRecorder
+//        try {
+//            mMediaRecorder.prepare();
+//        } catch (IllegalStateException e) {
+//            android.util.Log.d(TAG, "IllegalStateException preparing MediaRecorder: " + e.getMessage());
+//            releaseMediaRecorder();
+//            return false;
+//        } catch (IOException e) {
+//            android.util.Log.d(TAG, "IOException preparing MediaRecorder: " + e.getMessage());
+//            releaseMediaRecorder();
+//            return false;
+//        }
 
-        // Step 5: Prepare configured MediaRecorder
-        try {
-            mMediaRecorder.prepare();
-        } catch (IllegalStateException e) {
-            android.util.Log.d(TAG, "IllegalStateException preparing MediaRecorder: " + e.getMessage());
-            releaseMediaRecorder();
-            return false;
-        } catch (IOException e) {
-            android.util.Log.d(TAG, "IOException preparing MediaRecorder: " + e.getMessage());
-            releaseMediaRecorder();
-            return false;
-        }
-
-        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
-        builder.addMatchingUsage(AudioAttributes.USAGE_GAME);
-        builder.addMatchingUsage(AudioAttributes.USAGE_MEDIA);
-
-
-
-        try {
-            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
-
-            int minBufferSize = AudioRecord.getMinBufferSize(44100, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
-
-            mAudioRecord = new AudioRecord.Builder()
-                .setAudioPlaybackCaptureConfig(audioCaptureConfig)
-                .setAudioFormat(new AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(44100)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                    .build())
-                .setBufferSizeInBytes(minBufferSize)
-                .build();
-
-        } catch(Exception e) {
-            e.getMessage();
-        }
-
+//        AudioPlaybackCaptureConfiguration.Builder builder = new AudioPlaybackCaptureConfiguration.Builder(mMediaProjection);
+//        builder.addMatchingUsage(AudioAttributes.USAGE_GAME);
+//        builder.addMatchingUsage(AudioAttributes.USAGE_MEDIA);
+//
+//        try {
+//            AudioPlaybackCaptureConfiguration audioCaptureConfig = builder.build();
+//
+//            int minBufferSize = AudioRecord.getMinBufferSize(44100, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+//
+//            mAudioRecord = new AudioRecord.Builder()
+//                .setAudioPlaybackCaptureConfig(audioCaptureConfig)
+//                .setAudioFormat(new AudioFormat.Builder()
+//                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+//                    .setSampleRate(44100)
+//                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+//                    .build())
+//                .setBufferSizeInBytes(minBufferSize)
+//                .build();
+//
+//        } catch(Exception e) {
+//            e.getMessage();
+//        }
 
         return true;
     }
 
     private void releaseMediaRecorder() {
-        if (mMediaRecorder != null) {
-            mMediaRecorder.reset();
-            mMediaRecorder.release();
-            mMediaRecorder = null;
-        }
+        mPuffRecorder = null;
     }
 
     public File getOutputMediaFile(){
@@ -240,17 +236,12 @@ public class ScreenRecorder extends Service {
             return  null;
         }
 
-//        File rootPath = new File(getExternalFilesDir(null, "puffEengine"));
+        // TODO : change save path.
         File rootPath = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "CameraSample");
-//        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
-//                Environment.DIRECTORY_PICTURES), "CameraSample");
-
-        // This location works best if you want the created images to be shared
-        // between applications and persist after your app has been uninstalled.
 
         // Create the storage directory if it does not exist
         if (!rootPath.exists()){
-            if (! rootPath.mkdirs()) {
+            if (!rootPath.mkdirs()) {
                 android.util.Log.d("CameraSample", "failed to create directory");
                 return null;
             }
@@ -261,5 +252,32 @@ public class ScreenRecorder extends Service {
         File mediaFile = new File(rootPath.getPath() + File.separator + "VID_" + timeStamp + ".mp4");
 
         return mediaFile;
+    }
+
+    // Capture thread
+    private class CaptureThread extends Thread {
+        private final long FRAME_INTERVAL = 32; // 32 for 30 fps, 0 for full speed
+        private long mPreviousFrameTime = 0;
+        private boolean mShouldTerminate = false;
+        private WeakReference<ScreenRecorder> mScreenRecorderWeakReference;
+
+        CaptureThread(final WeakReference<ScreenRecorder> screenRecorderWeakReference) {
+            super();
+            mScreenRecorderWeakReference = screenRecorderWeakReference;
+        }
+
+        @Override
+        public void run() {
+
+            while(!mShouldTerminate) {
+
+                long currentTime = System.currentTimeMillis();
+                if (currentTime - mPreviousFrameTime > FRAME_INTERVAL) {
+                    mPreviousFrameTime = currentTime;
+                    ScreenRecorder recorder = mScreenRecorderWeakReference.get();
+                    recorder.mPuffRecorder.frameAvailableSoon();
+                }
+            }
+        }
     }
 }
